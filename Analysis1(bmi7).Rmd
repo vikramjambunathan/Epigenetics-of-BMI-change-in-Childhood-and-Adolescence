@@ -1,0 +1,305 @@
+---
+title: "analysis(bmi7)"
+author: "Vikram Jambunathan"
+date: "4/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error=FALSE, message=FALSE, warning=FALSE)
+library(CpGassoc)
+library(data.table)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+```
+
+The motivation of this analysis is to analyze ALSPAC data, to run an EWAS at 9 timepoints to find out if there is any association between DNA methylation and body mass index (BMI) change during childhood and adolescence.
+
+This project will aim to combine longitudinal data analysis approaches with standard EWAS methods to find whether including repeated measures of BMI reveals more epigenetic signatures
+
+First step is modelling BMI over age in a group of up to 14,000 children from the Avon Longitudinal Study of Parents and Children (ALSPAC)and then perform a standard EWAS of BMI at each timepoint.
+
+We will be using the package called CpGassoc to run the EWAS analysis.
+
+On comparing the data that we had, the structure of betas_cord resembles samplecpg (from the example data in the CpGassoc package), and the structure of bmi_data resembles samplepheno. But there is some tidying up to do. 
+
+We need to make our betas_cord object look EXACTLY like the samplecpg and make our bmi_data object look EXACTLY like samplepheno, link the covariates and Match the columns of betas_cord to the rows of bmi_data.
+
+```{r}
+betas_cord <- fread("betas_cord.csv")
+cpgnames <- read.csv("cpgnames.csv")
+bmi_data <- read.csv("bmi_data.csv")
+names(bmi_data)[1] <- 'cidB3967'
+link_cord <- data.frame(fread("link_cord.csv"))
+link_cord <- link_cord[order(link_cord$cidB3967),]
+bmi_data <- merge(link_cord,bmi_data,by="cidB3967", all.x = TRUE, all.y = TRUE)
+
+# linking covariates to the bmi_data.
+
+covariates <- data.frame(fread("covariates.csv"))
+covariates <- covariates[order(covariates$cidB3967),]
+bmi_data <- merge(bmi_data,covariates,by="cidB3967", all.x = TRUE, all.y = TRUE)
+
+# Considering bmi7 in this file.
+
+bmi7 <- bmi_data %>% filter(time == "F7") %>% select(Sample_Name,bmi,c(8:29)) %>% na.omit()
+
+```
+Then we will have to:
+
+1. Remove columns of betas_cord for Sample Names not in bmi7
+2. Sort bmi7 rows to be in order of the betas_cord columns
+3. Change betas_cord to a matrix
+4. Change row names of betas_cord matrix to cpgnames
+5. Run cpg.assoc(betas_cord, bmi7$bmi)
+6. Table of top 10 cpg
+7. Manhattan plot
+
+```{r}
+# For bmi7, we need to remove columns of betas_cord for Sample Names not in bmi7
+a <- t(bmi7)
+colnames(a) <- a[1,]
+a <-  as.data.frame(a[-1, ])
+# a <- as.data.frame(t(a))
+betas_cord <- betas_cord%>%select(which(colnames(betas_cord) %in% colnames(a)))
+betas_cord <- betas_cord %>% select(sort(names(.)))
+
+# Sorting the data so that they are in the same order
+
+betas_cord <- betas_cord %>% select(sort(names(.)))
+bmi7 <- bmi7[order(bmi7$Sample_Name),]
+
+# Change betas_cord to a matrix
+betas_cord <- as.matrix(betas_cord)
+rownames(betas_cord) <- cpgnames$cpgname
+
+# Running cpg.assoc
+covar <- bmi7[c(3:24)]
+cpg_assocF7 <- cpg.assoc(betas_cord, bmi7$bmi, covariates = covar)
+cpg_assocF7
+
+```
+# QQ PLOT
+```{r}
+
+# Plotting the results (QQ Plot)
+plot(cpg_assocF7)
+
+```
+
+# MANHATTAN PLOT
+
+```{r}
+# Merge with location info from the Illumina Human Methlyation Annotation Package.
+
+cpg_assoc_results = cpg_assocF7$results
+cpg_locations = data.frame(Locations)
+cpg_locations$CPG.Labels = row.names(cpg_locations)
+resultF7 <- merge(cpg_assoc_results, cpg_locations)
+```
+
+```{r}
+cpg_anno_rn <- rownames(cpg_locations)
+rownames(cpg_locations) <- NULL
+cpg_locations <- cbind(cpg_anno_rn,cpg_locations)
+names(cpg_locations)[1] <- 'TargetID'
+cpg_locations <- cpg_locations[order(cpg_locations$TargetID),]
+names(cpg_locations)[2] <- 'CHR'
+names(cpg_locations)[3] <- 'MAPINFO'
+cpg_locations <- cpg_locations[-c(4,5)]
+cpg_locations$CHR <- gsub("chr","",as.character(cpg_locations$CHR))
+rownames(cpg_locations) <- NULL
+```
+
+```{r}
+# Manhattan Plot
+
+manhattan(cpg_assocF7,cpg_locations$TargetID,cpg_locations$CHR, cpg_locations$MAPINFO)
+
+
+```
+
+#Summary Statistcs at specific timepoints.
+
+```{r}
+library(gtsummary)
+library(htmlwidgets)
+bmi_data_linked %>% 
+  select(bmi, age, time) %>%
+  tbl_summary(by = time)
+reorder
+
+```
+
+```{r}
+bmi_data_linked %>%
+  filter(time == "F7" & mumsmoke!= -1) %>%
+  mutate(bmi_category = cut(bmi,breaks = c(0,18.5,25,30,40))) %>%
+  select(sex,bwt,gestage,mumsmoke,mumbmi,cd8t_cord,cd4t_cord,nk_cord,
+              bcell_cord, mono_cord, gran_cord, bmi_category) %>%
+  tbl_summary(by = bmi_category) %>%
+  add_p()
+```
+
+#Boxplot of BMI vs Time (Age7~Age24) 
+
+```{r}
+bmi_data %>%
+  filter(age > 6) %>%
+  ggplot(aes(x = reorder(time,bmi), y = bmi, fill = time)) + labs(title = "Body Mass Index vs Time (Age7~Age 24)",x = "Time", y= "BMI") + geom_boxplot()
+```
+
+
+
+
+
+
+
+
+NOTE: THIS PART OF THE MARKDOWN FILE WAS ONLY USED FOR TESTING THE LONGITUDINAL ANALYSIS. DUE TO TIME CONSTRAINTS, AN UPDATED CODE WILL BE UPLOADED IN THE FUTURE.
+
+
+#Repeat EWAS using lm() and for()
+
+
+```{r error=FALSE, message=FALSE, warning=FALSE}
+
+dat <- data.frame(dat)
+df = data.frame(estimate = rep(NA,50), se = NA, tstatistic = NA, pvalue = NA)
+
+test = lm(dat[,4]~dat$BMI)
+
+summary(test)
+
+
+```
+
+```{r error=FALSE, message=FALSE, warning=FALSE. eval = FALSE}
+
+as.numeric(coef(summary(test))[2,])
+
+j = 1
+df[j,] <- as.numeric(coef(summary(test))[2,])
+
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+df = select(df, -starts_with("cpg_site"))
+            
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE}
+df = data.frame(estimate = rep(NA,50), se = NA, tstatistic = NA, pvalue = NA)
+
+for(i in 3:54){
+  test = lm(dat[,i]~dat$BMI)
+  df[i,] = as.numeric(coef(summary(test))[2,])
+}
+
+# Placing the cpg names beside the results
+
+df$cpg_site <- NA
+
+df$cpg_site[3:54] = names(dat)[3:54]
+df = na.omit(df)
+```
+
+
+
+
+
+
+# Modelling BMI over time
+
+
+Linear mixed models
+
+```{r error=FALSE, message=FALSE, warning=FALSE}
+
+# Read in bmi data
+
+bmi_lme_data <- fread("bmi_data.csv")
+
+library(ggplot2)
+
+# Plot bmi data over time
+ggplot(bmi_lme_data, aes(x=age,y=bmi)) + geom_point(aes(color=as.factor(id))) +
+  geom_smooth(method="lm", se = FALSE) +
+  theme_bw() + theme(legend.position = "none")
+
+
+ggplot(bmi_lme_data, aes(x=age,y=bmi)) +
+  geom_smooth(se = FALSE) +
+  theme_bw() + theme(legend.position = "none")
+
+ggplot(bmi_lme_data, aes(x=age,y=bmi)) + geom_line(aes(color=as.factor(id))) +
+  geom_smooth(method="lm", se = FALSE) +
+  theme_bw() + theme(legend.position = "none")
+
+library(tidyverse)
+bmi_lme_data %>%
+  filter(id<2000) %>%
+ggplot(aes(x=age,y=bmi)) + geom_line(aes(color=as.factor(id))) +
+  geom_smooth(method="lm", se = FALSE) +
+  theme_bw() + theme(legend.position = "none")
+```
+
+
+```{r error=FALSE, message=FALSE, warning=FALSE}
+
+# Model bmi data over time
+
+library(nlme)
+
+random_intercept_model <- lme(bmi~age, data = bmi_lme_data, random = ~1|id)
+
+summary(random_intercept_model)
+
+bmi_lme_data <- bmi_lme_data %>%
+  mutate(age_spline7 = ifelse(age > 7, age - 7, 0),
+         age_spline20 = ifelse(age > 20, age - 20, 0))
+
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE}
+
+# Random Slope Model
+
+random_slope_model <- lme(bmi ~ age, data = bmi_lme_data, random = ~age|id)
+
+summary(random_slope_model)
+
+
+# Random Slope and Spline Model
+random_spline_model <- lme(bmi ~ age + age_spline7 + age_spline20, data = bmi_lme_data, random = ~age|id)
+
+summary(random_spline_model)
+
+anova(random_intercept_model, random_slope_model, random_spline_model)
+
+```
+
+
+EWAS aries BMI age 7
+
+```{r}
+bmi7 <- bmi_lme_data %>% filter(time == "F7")
+
+```
+
+
+```{r}
+
+save(bmi_data_linked, resultF7, resultF9, resultF11, resultF12 , resultF13, resultF14, resultF15, resultF18, resultF24, file = "result.RData")
+
+```
+
+
+```{r}
+
+save(cpg_assocF7,cpg_assocF9, cpg_assocF11, cpg_assocF12, cpg_assocF13, cpg_assocF14, cpg_assocF15, cpg_assocF18, cpg_assocF24, file = "cpg_assoc_results(F7-24).RData")
+
+```

@@ -1,0 +1,156 @@
+---
+title: "Analysis9(bmi24)"
+author: "Vikram Jambunathan"
+date: '2022-06-18'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error=FALSE, message=FALSE, warning=FALSE)
+library(CpGassoc)
+library(data.table)
+library(tidyverse)
+library(dplyr)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+```
+
+
+```{r}
+library(gtsummary)
+bmi_data %>% 
+  select(bmi, age, time) %>%
+  tbl_summary(by = time) 
+
+bmi_data %>%
+  filter(time == "F24" & mumsmoke!= -1) %>%
+  mutate(bmi_category = cut(bmi,breaks = c(0,18.5,25,30,40))) %>%
+  select(sex,bwt,gestage,mumsmoke,mumbmi,cd8t_cord,cd4t_cord,nk_cord,
+              bcell_cord, mono_cord, gran_cord, bmi_category) %>%
+  tbl_summary(by = bmi_category) %>%
+  add_p()
+
+bmi_data %>%
+  filter(age > 6) %>%
+  ggplot(aes(x = time, y = bmi)) + geom_boxplot()
+?reorder
+
+#save(bmi_data, resultF7, resultsF9, resultsF11, file = "result.RData")
+```
+
+```{r}
+betas_cord <- fread("betas_cord.csv")
+cpgnames <- read.csv("cpgnames.csv")
+bmi_data <- read.csv("bmi_data.csv")
+names(bmi_data)[1] <- 'cidB3967'
+link_cord <- data.frame(fread("link_cord.csv"))
+link_cord <- link_cord[order(link_cord$cidB3967),]
+bmi_data <- merge(link_cord,bmi_data,by="cidB3967", all.x = TRUE, all.y = TRUE)
+
+# linking covariates to the bmi_data.
+
+covariates <- data.frame(fread("covariates.csv"))
+covariates <- covariates[order(covariates$cidB3967),]
+bmi_data <- merge(bmi_data,covariates,by="cidB3967", all.x = TRUE, all.y = TRUE)
+
+# Considering bmi24.
+
+bmi24 <- bmi_data %>% filter(time == "F24") %>% select(Sample_Name,bmi,c(8:29)) %>% na.omit()
+
+```
+
+
+1. Remove columns of betas_cord for Sample Names not in bmi7
+2. Sort bmi7 rows to be in order of the betas_cord columns
+3. Change betas_cord to a matrix
+4. Change row names of betas_cord matrix to cpgnames
+5. Run cpg.assoc(betas_cord, bmi7$bmi)
+6. Table of top 10 cpg
+7. Manhattan plot (Annotate)
+
+
+```{r}
+# For bmi24, we need to remove columns of betas_cord for Sample Names not in bmi24
+a <- t(bmi24)
+colnames(a) <- a[1,]
+a <- as.data.frame(a[-1, ])
+
+betas_cord <- betas_cord%>%select(which(colnames(betas_cord) %in% colnames(a)))
+betas_cord <- betas_cord %>% select(sort(names(.)))
+
+```
+
+```{r}
+# Sorting the data so that they are in the same order
+
+betas_cord <- betas_cord %>% select(sort(names(.)))
+bmi24 <- bmi24[order(bmi24$Sample_Name),]
+
+```
+
+```{r}
+# Change betas_cord to a matrix
+betas_cord <- as.matrix(betas_cord)
+rownames(betas_cord) <- cpgnames$cpgname
+```
+
+```{r}
+# Running cpg.assoc
+covar <- bmi24[c(3:24)]
+cpg_assocF24 <- cpg.assoc(betas_cord, bmi24$bmi, covariates = covar)
+cpg_assocF24
+
+```
+
+```{r}
+
+# Plotting the results (QQ Plot)
+
+plot(cpg_assocF24)
+
+```
+
+
+MANHATTAN PLOT
+
+```{r}
+# Merge with location info from the Illumina Human Methlyation Annotation Package.
+cpg_assoc_results = cpg_assocF24$results
+cpg_locations = data.frame(Locations)
+cpg_locations$CPG.Labels = row.names(cpg_locations)
+resultF24 <- merge(cpg_assoc_results, cpg_locations)
+```
+
+```{r}
+cpg_anno_rn <- rownames(cpg_locations)
+rownames(cpg_locations) <- NULL
+cpg_locations <- cbind(cpg_anno_rn,cpg_locations)
+names(cpg_locations)[1] <- 'TargetID'
+cpg_locations <- cpg_locations[order(cpg_locations$TargetID),]
+names(cpg_locations)[2] <- 'CHR'
+names(cpg_locations)[3] <- 'MAPINFO'
+cpg_locations <- cpg_locations[-c(4,5)]
+cpg_locations$CHR <- gsub("chr","",as.character(cpg_locations$CHR))
+rownames(cpg_locations) <- NULL
+```
+
+```{r}
+# t-statistic plot:
+# plot(cpg_assoc_results,tplot=TRUE)
+
+
+# Manhattan Plot
+
+manhattan(cpg_assocF24,cpg_locations$TargetID,cpg_locations$CHR, cpg_locations$MAPINFO)
+
+```
+
+
+```{r}
+bmi_data_linked %>%
+  filter(time == "F24"& mumsmoke!= -1) %>%
+  mutate(bmi_category = cut(bmi,breaks = c(0,18.5,25,30,40))) %>%
+  select(sex,bwt,gestage,mumsmoke,mumbmi,cd8t_cord,cd4t_cord,nk_cord,
+              bcell_cord, mono_cord, gran_cord, bmi_category) %>%
+  tbl_summary(by = bmi_category) %>%
+  add_p()
+```
